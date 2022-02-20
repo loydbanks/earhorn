@@ -10,7 +10,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 from typing_extensions import Literal, Protocol, TypeAlias
 
-from .prometheus import stream_silence, stream_status
+from .prometheus import stream_silence, stream_status, unhandled_errors
 
 
 def now():
@@ -34,12 +34,21 @@ class StatusEvent(Event):
     kind: Literal["up", "down"]
 
 
-AnyEvent: TypeAlias = Union[SilenceEvent, StatusEvent]
+class ErrorEvent(Event):
+    name = "error"
+    message: str
+
+
+AnyEvent: TypeAlias = Union[SilenceEvent, StatusEvent, ErrorEvent]
 
 
 class Hook(Protocol):  # pylint: disable=too-few-public-methods
     def __call__(self, event: AnyEvent):
         pass
+
+
+class HookError(Exception):
+    """An error that occurred inside a hook"""
 
 
 class FileHook:  # pylint: disable=too-few-public-methods
@@ -55,6 +64,7 @@ class FileHook:  # pylint: disable=too-few-public-methods
             run((self.filepath, event.json()), check=True)
         except CalledProcessError as exception:
             logger.error(exception)
+            raise HookError(exception)
 
 
 class PrometheusHook:  # pylint: disable=too-few-public-methods
@@ -64,6 +74,8 @@ class PrometheusHook:  # pylint: disable=too-few-public-methods
         elif isinstance(event, SilenceEvent):
             state_map = {"start": "up", "end": "down"}
             stream_silence.state(state_map[event.kind])  # pylint: disable=no-member
+        elif isinstance(event, ErrorEvent):
+            unhandled_errors.info(event.dict())
 
 
 class Handler(Thread):
@@ -89,7 +101,10 @@ class Handler(Thread):
                 event: AnyEvent = self.queue.get(timeout=5)
                 logger.debug(f"{event.name}: {event.json()}")
                 for hook in self.hooks:
-                    hook(event)
+                    try:
+                        hook(event)
+                    except HookError as exception:
+                        self.queue.put(ErrorEvent(message=str(exception)))
                 self.queue.task_done()
             except Empty:
                 pass
