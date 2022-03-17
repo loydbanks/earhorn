@@ -13,6 +13,7 @@ from .archive import TIMESTAMP_FORMAT, Archiver
 from .check import check_stream
 from .event import EventHandler, FileHook, PrometheusHook
 from .silence import SilenceListener
+from .stats import StatsHandler
 
 
 # pylint: disable=too-many-arguments,too-many-locals
@@ -38,6 +39,23 @@ from .silence import SilenceListener
     help="Listen port for the prometheus metrics endpoint.",
     default=9950,
     show_default=True,
+)
+@click.option(
+    "--icecast-stats-url",
+    envvar="ICECAST_STATS_URL",
+    help="URL to the icecast admin xml stats page.",
+)
+@click.option(
+    "--icecast-stats-user",
+    envvar="ICECAST_STATS_USER",
+    help="Username for the icecast admin xml stats page.",
+    default="admin",
+    show_default=True,
+)
+@click.option(
+    "--icecast-stats-password",
+    envvar="ICECAST_STATS_PASSWORD",
+    help="Password for the icecast admin xml stats page.",
 )
 @click.option(
     "--archive-path",
@@ -93,6 +111,9 @@ def cli(
     hook: Optional[str],
     prometheus: bool,
     prometheus_listen_port: int,
+    icecast_stats_url: Optional[str],
+    icecast_stats_user: str,
+    icecast_stats_password: str,
     archive_path: Optional[str],
     archive_segment_size: int,
     archive_segment_filename: str,
@@ -127,6 +148,15 @@ def cli(
         logger.info("starting prometheus server")
         start_http_server(prometheus_listen_port)
         event_handler.hooks.append(PrometheusHook())
+
+        if icecast_stats_url is not None:
+            logger.info("loading icecast stats handler")
+            stats_handler = StatsHandler(
+                stop=stop_event,
+                url=icecast_stats_url,
+                auth=(icecast_stats_user, icecast_stats_password),
+            )
+            stats_handler.start()
 
     event_handler.start()
 
